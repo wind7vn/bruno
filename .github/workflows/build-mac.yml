@@ -1,0 +1,36 @@
+name: Build Bruno Unlimited Mac
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup & Build Prerequisite Packages
+        run: node ./scripts/setup.js
+
+      - name: Build Web App
+        run: npm run build:web
+
+      - name: Build Desktop App (.dmg)
+        run: npm run build:electron:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload Installer (.dmg)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bruno-Unlimited-Mac
+          path: |
+            packages/bruno-electron/out/*.dmg
+            packages/bruno-electron/out/*.zip
