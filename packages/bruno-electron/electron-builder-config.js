@@ -15,6 +15,7 @@ const config = {
     }
   ],
   files: ['**/*'],
+  publish: null,
   afterSign: process.env.APPLE_ID ? 'notarize.js' : null,
   mac: {
     artifactName: '${name}_${version}_${arch}_${os}.${ext}',
