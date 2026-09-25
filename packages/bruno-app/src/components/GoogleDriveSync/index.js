@@ -31,6 +31,8 @@ const GoogleDriveSync = () => {
     clientId: '',
     clientSecret: ''
   });
+  const [diffInfo, setDiffInfo] = useState(null);
+  const [isCheckingDiff, setIsCheckingDiff] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
@@ -54,9 +56,31 @@ const GoogleDriveSync = () => {
     }
   }, []);
 
+  const checkDiff = useCallback(async () => {
+    if (!window.ipcRenderer || !activeWorkspace?.pathname) return;
+    setIsCheckingDiff(true);
+    try {
+      const diff = await window.ipcRenderer.invoke('gdrive:check-diff', {
+        workspacePath: activeWorkspace.pathname,
+        workspaceName: activeWorkspace.name || 'My Workspace'
+      });
+      setDiffInfo(diff);
+    } catch (err) {
+      console.error('Diff check error:', err);
+    } finally {
+      setIsCheckingDiff(false);
+    }
+  }, [activeWorkspace?.pathname, activeWorkspace?.name]);
+
   useEffect(() => {
     fetchStatus();
   }, [fetchStatus]);
+
+  useEffect(() => {
+    if (isOpen && status.isConnected && activeWorkspace?.pathname) {
+      checkDiff();
+    }
+  }, [isOpen, status.isConnected, activeWorkspace?.pathname, checkDiff]);
 
   const handleSaveConfig = async (e) => {
     e?.preventDefault();
@@ -110,37 +134,79 @@ const GoogleDriveSync = () => {
         lastSynced: null,
         folderUrl: null
       }));
+      setDiffInfo(null);
     } catch (err) {
       toast.error('Lỗi khi đăng xuất');
     }
   };
 
-  const handleSync = async () => {
+  // Push local changes to Google Drive (Delta Upload)
+  const handlePush = async () => {
     if (!window.ipcRenderer) return;
     if (!activeWorkspace?.pathname) {
-      toast.error('Không tìm thấy thư mục của Workspace hiện tại để đồng bộ.');
+      toast.error('Không tìm thấy thư mục Workspace.');
       return;
     }
 
     setIsSyncing(true);
     try {
-      toast.loading(`Đang đồng bộ Workspace "${activeWorkspace.name}" lên Google Drive...`, { id: 'gdrive-sync' });
-      const res = await window.ipcRenderer.invoke('gdrive:sync', {
+      toast.loading('Đang quét mã băm và tải các file thay đổi lên Drive...', { id: 'gdrive-push' });
+      const res = await window.ipcRenderer.invoke('gdrive:sync-push', {
         workspacePath: activeWorkspace.pathname,
         workspaceName: activeWorkspace.name || 'My Workspace'
       });
 
       if (res && res.success) {
-        toast.success('Đồng bộ lên Google Drive thành công!', { id: 'gdrive-sync' });
+        const msg = res.uploadedCount > 0
+          ? `Đã đẩy ${res.uploadedCount} file thay đổi lên Drive (${res.unchangedCount} file không đổi)`
+          : `Tất cả ${res.totalFiles} files đều đã khớp với Google Drive!`;
+        toast.success(msg, { id: 'gdrive-push' });
         setStatus((prev) => ({
           ...prev,
           lastSynced: res.lastSynced,
           folderUrl: res.folderUrl
         }));
+        await checkDiff();
       }
     } catch (err) {
       console.error(err);
-      toast.error(err?.message || 'Đồng bộ thất bại', { id: 'gdrive-sync' });
+      toast.error(err?.message || 'Đồng bộ thất bại', { id: 'gdrive-push' });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Pull remote changes from Google Drive to local (Delta Download)
+  const handlePull = async () => {
+    if (!window.ipcRenderer) return;
+    if (!activeWorkspace?.pathname) {
+      toast.error('Không tìm thấy thư mục Workspace.');
+      return;
+    }
+
+    setIsSyncing(true);
+    try {
+      toast.loading('Đang kéo các file mới từ Google Drive về máy...', { id: 'gdrive-pull' });
+      const res = await window.ipcRenderer.invoke('gdrive:sync-pull', {
+        workspacePath: activeWorkspace.pathname,
+        workspaceName: activeWorkspace.name || 'My Workspace'
+      });
+
+      if (res && res.success) {
+        const msg = res.downloadedCount > 0
+          ? `Đã tải về ${res.downloadedCount} file mới từ Google Drive (${res.unchangedCount} file không đổi)`
+          : 'Tất cả file dưới máy đã là mới nhất!';
+        toast.success(msg, { id: 'gdrive-pull' });
+        setStatus((prev) => ({
+          ...prev,
+          lastSynced: res.lastSynced,
+          folderUrl: res.folderUrl
+        }));
+        await checkDiff();
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || 'Kéo dữ liệu thất bại', { id: 'gdrive-pull' });
     } finally {
       setIsSyncing(false);
     }
@@ -160,7 +226,7 @@ const GoogleDriveSync = () => {
           fetchStatus();
         }}
         className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md hover:bg-neutral-800 transition-colors border border-neutral-700/50"
-        title="Google Drive Sync"
+        title="Google Drive Hash Map Sync"
       >
         <GoogleDriveIcon size={15} />
         <span className="hidden sm:inline">Drive Sync</span>
@@ -173,7 +239,7 @@ const GoogleDriveSync = () => {
       {isOpen && (
         <Modal
           size="md"
-          title="Đồng bộ Google Drive"
+          title="Đồng bộ Google Drive (Hash Map Delta Sync)"
           handleCancel={() => setIsOpen(false)}
           hideFooter={true}
         >
@@ -182,9 +248,9 @@ const GoogleDriveSync = () => {
             <div className="flex items-center gap-3 p-3.5 rounded-xl bg-neutral-900/60 border border-neutral-800">
               <GoogleDriveIcon size={36} />
               <div>
-                <h4 className="font-semibold text-base">Google Drive Cloud Backup</h4>
+                <h4 className="font-semibold text-base">Hash Map Delta Sync</h4>
                 <p className="text-xs text-neutral-400 mt-0.5">
-                  Sao lưu toàn bộ Collections & Environments của Workspace lên Google Drive an toàn.
+                  Đồng bộ vi sai theo từng file: Chỉ tải lên/tải về những file có mã băm (Hash) thay đổi.
                 </p>
               </div>
             </div>
@@ -256,14 +322,56 @@ const GoogleDriveSync = () => {
                   </div>
 
                   <div className="flex justify-between items-center">
-                    <span className="text-neutral-400">Thư mục Google Drive:</span>
+                    <span className="text-neutral-400">Thư mục trên Drive:</span>
                     <button
                       type="button"
                       onClick={openFolder}
                       className="text-blue-400 hover:underline inline-flex items-center gap-1 font-medium"
                     >
-                      📁 Bruno Collections ↗
+                      📁 Bruno Collections / {activeWorkspace?.name || 'Workspace'} ↗
                     </button>
+                  </div>
+
+                  {/* Hash Map Status Preview */}
+                  <div className="pt-2 border-t border-neutral-800/60">
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-neutral-400">Trạng thái Hash Map:</span>
+                      <button
+                        type="button"
+                        onClick={checkDiff}
+                        disabled={isCheckingDiff}
+                        className="text-neutral-400 hover:text-neutral-200 text-[11px]"
+                      >
+                        {isCheckingDiff ? 'Đang so khớp...' : '🔄 Kiểm tra lại'}
+                      </button>
+                    </div>
+
+                    {diffInfo ? (
+                      <div className="p-2 rounded bg-neutral-950/70 border border-neutral-800/80 space-y-1">
+                        <div className="flex items-center justify-between text-neutral-300">
+                          <span>Tổng số file dưới máy:</span>
+                          <span className="font-mono">{diffInfo.totalLocalFiles}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-neutral-300">
+                          <span>File khớp mã băm (Unchanged):</span>
+                          <span className="font-mono text-emerald-400">{diffInfo.unchanged}</span>
+                        </div>
+                        {diffInfo.toUpload?.length > 0 && (
+                          <div className="flex items-center justify-between text-amber-400 font-medium">
+                            <span>File cần đẩy lên (To Upload):</span>
+                            <span className="font-mono">+{diffInfo.toUpload.length}</span>
+                          </div>
+                        )}
+                        {diffInfo.toDownload?.length > 0 && (
+                          <div className="flex items-center justify-between text-blue-400 font-medium">
+                            <span>File mới trên Drive (To Download):</span>
+                            <span className="font-mono">+{diffInfo.toDownload.length}</span>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-neutral-500 italic">Đang tải thông tin Hash Map...</div>
+                    )}
                   </div>
 
                   <div className="flex justify-between items-center pt-1 border-t border-neutral-800/60">
@@ -274,20 +382,28 @@ const GoogleDriveSync = () => {
                   </div>
                 </div>
 
-                {/* Big Sync Action Button */}
-                <button
-                  type="button"
-                  onClick={handleSync}
-                  disabled={isSyncing}
-                  className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-medium text-white bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] transition-all shadow-lg shadow-emerald-900/30 disabled:opacity-50"
-                >
-                  <span className={isSyncing ? 'animate-spin' : ''}>🔄</span>
-                  <span>
-                    {isSyncing
-                      ? 'Đang nén và đẩy lên Google Drive...'
-                      : `Đồng bộ "${activeWorkspace?.name || 'Workspace'}" lên Drive`}
-                  </span>
-                </button>
+                {/* Action Buttons: Push & Pull */}
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={handlePush}
+                    disabled={isSyncing}
+                    className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-medium text-xs text-white bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] transition-all shadow-md shadow-emerald-900/20 disabled:opacity-50"
+                  >
+                    <span>⬆️</span>
+                    <span>{isSyncing ? 'Đang đẩy...' : 'Đẩy lên Drive (Push)'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handlePull}
+                    disabled={isSyncing}
+                    className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-medium text-xs text-white bg-blue-600 hover:bg-blue-500 active:scale-[0.99] transition-all shadow-md shadow-blue-900/20 disabled:opacity-50"
+                  >
+                    <span>⬇️</span>
+                    <span>{isSyncing ? 'Đang kéo...' : 'Kéo về máy (Pull)'}</span>
+                  </button>
+                </div>
               </div>
             )}
 
