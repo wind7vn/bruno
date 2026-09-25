@@ -1,15 +1,18 @@
 name: Build Bruno Unlimited Mac
 
 on:
-  schedule:
-    # Tự động kiểm tra và sync mỗi ngày lúc 00:00 UTC (07:00 sáng giờ VN)
-    - cron: '0 0 * * *'
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       force_build:
         description: 'Bắt buộc build kể cả khi không có commit mới'
         type: boolean
         default: true
+  schedule:
+    # Tự động kiểm tra và sync mỗi ngày lúc 00:00 UTC (07:00 sáng giờ VN)
+    - cron: '0 0 * * *'
 
 permissions:
   contents: write
@@ -31,6 +34,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Sync with Upstream (usebruno/bruno)
+        if: github.event_name == 'schedule'
         id: sync
         run: |
           git remote add upstream https://github.com/usebruno/bruno.git 2>/dev/null || true
@@ -52,7 +56,7 @@ jobs:
       - name: Determine if build is needed
         id: check_build
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.event_name }}" = "push" ]; then
             echo "run_build=true" >> $GITHUB_OUTPUT
           elif [ "${{ steps.sync.outputs.has_updates }}" = "true" ]; then
             echo "run_build=true" >> $GITHUB_OUTPUT
