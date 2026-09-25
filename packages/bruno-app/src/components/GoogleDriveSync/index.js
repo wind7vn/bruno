@@ -2,9 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
 import Modal from 'components/Modal';
+import Button from 'ui/Button';
 
 // Google Drive SVG Icon
-const GoogleDriveIcon = ({ size = 18, className = '' }) => (
+export const GoogleDriveIcon = ({ size = 18, className = '' }) => (
   <svg
     width={size}
     height={size}
@@ -21,8 +22,20 @@ const GoogleDriveIcon = ({ size = 18, className = '' }) => (
   </svg>
 );
 
-const GoogleDriveSync = () => {
-  const [isOpen, setIsOpen] = useState(false);
+const GoogleDriveSync = ({ variant = 'titlebar', isOpen: controlledIsOpen, onClose: controlledOnClose }) => {
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isOpen = controlledIsOpen !== undefined ? controlledIsOpen : internalIsOpen;
+  const closeModal = () => {
+    if (controlledOnClose) {
+      controlledOnClose();
+    } else {
+      setInternalIsOpen(false);
+    }
+  };
+  const openModal = () => {
+    setInternalIsOpen(true);
+    fetchStatus();
+  };
   const [status, setStatus] = useState({
     isConnected: false,
     user: null,
@@ -219,28 +232,37 @@ const GoogleDriveSync = () => {
 
   return (
     <>
-      {/* Icon button on TitleBar */}
-      <button
-        onClick={() => {
-          setIsOpen(true);
-          fetchStatus();
-        }}
-        className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md hover:bg-neutral-800 transition-colors border border-neutral-700/50"
-        title="Google Drive Hash Map Sync"
-      >
-        <GoogleDriveIcon size={15} />
-        <span className="hidden sm:inline">Drive Sync</span>
-        {status.isConnected && (
-          <span className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-emerald-500/20" />
-        )}
-      </button>
+      {variant === 'quick-action' && (
+        <Button
+          color="light"
+          size="sm"
+          icon={<GoogleDriveIcon size={14} />}
+          onClick={openModal}
+        >
+          Sync Google Drive
+        </Button>
+      )}
+
+      {variant === 'titlebar' && (
+        <button
+          onClick={openModal}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md hover:bg-neutral-800 transition-colors border border-neutral-700/50"
+          title="Google Drive Hash Map Sync"
+        >
+          <GoogleDriveIcon size={15} />
+          <span className="hidden sm:inline">Drive Sync</span>
+          {status.isConnected && (
+            <span className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-emerald-500/20" />
+          )}
+        </button>
+      )}
 
       {/* Modal */}
       {isOpen && (
         <Modal
           size="md"
           title="Đồng bộ Google Drive (Hash Map Delta Sync)"
-          handleCancel={() => setIsOpen(false)}
+          handleCancel={closeModal}
           hideFooter={true}
         >
           <div className="p-4 space-y-4 text-sm">

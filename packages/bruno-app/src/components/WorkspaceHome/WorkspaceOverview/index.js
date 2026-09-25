@@ -14,6 +14,7 @@ import usePostmanPackagePrompt from 'hooks/usePostmanPackagePrompt';
 import Button from 'ui/Button';
 import CollectionsList from './CollectionsList';
 import WorkspaceDocs from '../WorkspaceDocs';
+import GoogleDriveSync from 'components/GoogleDriveSync';
 import StyledWrapper from './StyledWrapper';
 
 const WorkspaceOverview = ({ workspace }) => {
@@ -179,6 +180,7 @@ const WorkspaceOverview = ({ workspace }) => {
               >
                 Import Collection
               </Button>
+              <GoogleDriveSync variant="quick-action" />
             </div>
           </div>
 

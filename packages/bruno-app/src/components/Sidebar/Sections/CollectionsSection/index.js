@@ -37,6 +37,7 @@ import usePostmanPackagePrompt from 'hooks/usePostmanPackagePrompt';
 import WelcomeModal from 'components/WelcomeModal';
 import Collections from 'components/Sidebar/Collections';
 import SidebarSection from 'components/Sidebar/SidebarSection';
+import GoogleDriveSync, { GoogleDriveIcon } from 'components/GoogleDriveSync';
 import { openDevtoolsAndSwitchToTerminal } from 'utils/terminal';
 import useKeybinding from 'hooks/useKeybinding';
 
@@ -60,6 +61,7 @@ const CollectionsSection = () => {
   const [importCollectionLocationModalOpen, setImportCollectionLocationModalOpen] = useState(false);
   const [showCloneGitModal, setShowCloneGitModal] = useState(false);
   const [gitRepositoryUrl, setGitRepositoryUrl] = useState(null);
+  const [driveSyncModalOpen, setDriveSyncModalOpen] = useState(false);
   const { postmanPackagePrompt, clearPostmanPackagePrompt, handleImportResolved } = usePostmanPackagePrompt();
 
   // Import collection shortcut
@@ -261,6 +263,14 @@ const CollectionsSection = () => {
       onClick: () => {
         setImportCollectionModalOpen(true);
       }
+    },
+    {
+      id: 'google-drive-sync',
+      leftSection: GoogleDriveIcon,
+      label: 'Google Drive Sync',
+      onClick: () => {
+        setDriveSyncModalOpen(true);
+      }
     }
   ];
 
@@ -399,6 +409,13 @@ const CollectionsSection = () => {
           report={postmanPackagePrompt.report}
           collectionPath={postmanPackagePrompt.collectionPath}
           onClose={clearPostmanPackagePrompt}
+        />
+      )}
+      {driveSyncModalOpen && (
+        <GoogleDriveSync
+          variant="none"
+          isOpen={driveSyncModalOpen}
+          onClose={() => setDriveSyncModalOpen(false)}
         />
       )}
       <SidebarSection
