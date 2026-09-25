@@ -82,14 +82,19 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Installer Artifacts (.dmg)
+      - name: Upload Apple Silicon DMG (M1/M2/M3/M4)
         if: steps.check_build.outputs.run_build == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: Bruno-Unlimited-Mac
-          path: |
-            packages/bruno-electron/out/*.dmg
-            packages/bruno-electron/out/*.zip
+          name: Bruno-Mac-AppleSilicon-arm64
+          path: packages/bruno-electron/out/*arm64*.dmg
+
+      - name: Upload Intel DMG
+        if: steps.check_build.outputs.run_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bruno-Mac-Intel-x64
+          path: packages/bruno-electron/out/*x64*.dmg
 
       - name: Publish to GitHub Releases
         if: steps.check_build.outputs.run_build == 'true'
@@ -98,9 +103,10 @@ jobs:
           tag_name: latest-mac
           name: "Bruno Unlimited Mac (Latest Auto-Build)"
           body: |
-            Bản cài đặt Bruno Unlimited Workspaces được build tự động từ commit mới nhất của `usebruno/bruno`.
+            Bản cài đặt Bruno Unlimited Workspaces (.dmg) cho macOS:
+            - **Chip Apple Silicon (M1/M2/M3/M4):** Tải file `*arm64*.dmg` (~130MB)
+            - **Chip Intel:** Tải file `*x64*.dmg` (~135MB)
           files: |
             packages/bruno-electron/out/*.dmg
-            packages/bruno-electron/out/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

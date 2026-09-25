@@ -24,10 +24,6 @@ const config = {
       {
         target: 'dmg',
         arch: ['arm64', 'x64']
-      },
-      {
-        target: 'zip',
-        arch: ['arm64', 'x64']
       }
     ],
     icon: 'resources/icons/mac/icon.icns',
