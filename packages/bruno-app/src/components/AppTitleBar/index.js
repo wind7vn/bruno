@@ -20,6 +20,7 @@ import CreateWorkspace from 'components/WorkspaceSidebar/CreateWorkspace';
 import ImportWorkspace from 'components/WorkspaceSidebar/ImportWorkspace';
 
 import IconBottombarToggle from 'components/Icons/IconBottombarToggle/index';
+import GoogleDriveSync from 'components/GoogleDriveSync';
 import AppMenu from './AppMenu';
 import StyledWrapper from './StyledWrapper';
 import ResponseLayoutToggle from 'components/ResponsePane/ResponseLayoutToggle';
@@ -325,6 +326,7 @@ const AppTitleBar = () => {
             </ActionIcon>
 
             <ResponseLayoutToggle />
+            <GoogleDriveSync />
           </div>
 
           {showWindowControls && (
