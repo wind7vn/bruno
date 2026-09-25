@@ -17,6 +17,21 @@ const store = new Store({ name: 'google-drive-auth' });
 
 let authServer = null;
 
+const formatApiError = (err) => {
+  console.error('Google Drive API Error:', err?.response?.data || err.message);
+  const apiMessage = err.response?.data?.error?.message;
+  if (apiMessage) {
+    if (apiMessage.includes('insufficient authentication scopes') || err.response?.status === 403) {
+      return new Error(
+        `Google Drive (403): ${apiMessage}.\n`
+        + 'Cách khắc phục: Hãy BẬT "Google Drive API" trên Google Cloud Console, sau đó Đăng xuất và Đăng nhập lại trong Bruno, nhớ TÍCH CHỌN ô cấp quyền truy cập Google Drive.'
+      );
+    }
+    return new Error(`Google Drive: ${apiMessage}`);
+  }
+  return err;
+};
+
 // Calculate SHA-256 hash of a file
 const calculateFileHash = (filePath) => {
   const hash = crypto.createHash('sha256');
@@ -131,7 +146,7 @@ const findOrCreateFolder = async (accessToken, folderName, parentId = null) => {
   const createRes = await axios.post('https://www.googleapis.com/drive/v3/files', metadata, {
     params: { fields: 'id, name, webViewLink' },
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      'Authorization': `Bearer ${accessToken}`,
       'Content-Type': 'application/json'
     }
   });
@@ -210,7 +225,7 @@ const saveRemoteManifest = async (accessToken, workspaceFolderId, manifestFileId
       method: 'patch',
       url: `https://www.googleapis.com/upload/drive/v3/files/${manifestFileId}?uploadType=media`,
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        'Authorization': `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
         'Content-Length': buffer.length
       },
@@ -221,9 +236,9 @@ const saveRemoteManifest = async (accessToken, workspaceFolderId, manifestFileId
     // Create new
     const boundary = '-------ManifestBoundary' + Date.now();
     const metadataPart = Buffer.from(
-      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
-        JSON.stringify({ name: 'manifest.json', parents: [workspaceFolderId] }) +
-        '\r\n'
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`
+      + JSON.stringify({ name: 'manifest.json', parents: [workspaceFolderId] })
+      + '\r\n'
     );
     const mediaPart = Buffer.from(`--${boundary}\r\nContent-Type: application/json\r\n\r\n`);
     const closingPart = Buffer.from(`\r\n--${boundary}--\r\n`);
@@ -233,7 +248,7 @@ const saveRemoteManifest = async (accessToken, workspaceFolderId, manifestFileId
       method: 'post',
       url: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        'Authorization': `Bearer ${accessToken}`,
         'Content-Type': `multipart/related; boundary=${boundary}`,
         'Content-Length': body.length
       },
@@ -253,7 +268,7 @@ const uploadSingleFile = async (accessToken, fullLocalPath, fileName, parentFold
         method: 'patch',
         url: `https://www.googleapis.com/upload/drive/v3/files/${existingDriveId}?uploadType=media&fields=id,name,webViewLink`,
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/octet-stream',
           'Content-Length': fileBuffer.length
         },
@@ -269,9 +284,9 @@ const uploadSingleFile = async (accessToken, fullLocalPath, fileName, parentFold
   // Create new multipart file
   const boundary = '-------BrunoDriveBoundary' + Date.now();
   const metadataPart = Buffer.from(
-    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
-      JSON.stringify({ name: fileName, parents: [parentFolderId] }) +
-      '\r\n'
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`
+    + JSON.stringify({ name: fileName, parents: [parentFolderId] })
+    + '\r\n'
   );
   const mediaPartHeader = Buffer.from(
     `--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`
@@ -283,7 +298,7 @@ const uploadSingleFile = async (accessToken, fullLocalPath, fileName, parentFold
     method: 'post',
     url: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      'Authorization': `Bearer ${accessToken}`,
       'Content-Type': `multipart/related; boundary=${boundary}`,
       'Content-Length': multipartBody.length
     },
@@ -408,7 +423,17 @@ const registerGoogleDriveIpc = (mainWindow) => {
                 }
               );
 
-              const { access_token, refresh_token, expires_in } = tokenRes.data;
+              const { access_token, refresh_token, expires_in, scope } = tokenRes.data;
+              const grantedScopes = scope || '';
+              if (!grantedScopes.includes('drive')) {
+                if (authServer) authServer.close();
+                return reject(
+                  new Error(
+                    'Bạn chưa cấp quyền truy cập Google Drive! Vui lòng: 1. Đảm bảo đã BẬT "Google Drive API" trên Google Cloud. 2. Khi đăng nhập, hãy TÍCH CHỌN ô cho phép Google Drive trước khi bấm Tiếp tục.'
+                  )
+                );
+              }
+
               store.set('accessToken', access_token);
               if (refresh_token) {
                 store.set('refreshToken', refresh_token);
@@ -476,201 +501,213 @@ const registerGoogleDriveIpc = (mainWindow) => {
 
   // Check diff between local and remote hash maps
   ipcMain.handle('gdrive:check-diff', async (event, { workspacePath, workspaceName }) => {
-    if (!workspacePath || !fs.existsSync(workspacePath)) {
-      throw new Error(`Đường dẫn Workspace không hợp lệ: ${workspacePath}`);
-    }
-
-    const accessToken = await getValidAccessToken();
-    const mainFolder = await findOrCreateFolder(accessToken, 'Bruno Collections');
-    const sanitizedName = (workspaceName || 'workspace').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
-    const workspaceFolder = await findOrCreateFolder(accessToken, sanitizedName, mainFolder.id);
-
-    const localMap = buildLocalHashMap(workspacePath);
-    const { manifest } = await fetchRemoteManifest(accessToken, workspaceFolder.id);
-    const remoteMap = manifest.files || {};
-
-    const toUpload = [];
-    const toDownload = [];
-    let unchanged = 0;
-
-    // Check local files against remote
-    for (const [relPath, localItem] of Object.entries(localMap)) {
-      const remoteItem = remoteMap[relPath];
-      if (!remoteItem) {
-        toUpload.push({ relPath, status: 'new' });
-      } else if (remoteItem.hash !== localItem.hash) {
-        toUpload.push({ relPath, status: 'modified' });
-      } else {
-        unchanged++;
+    try {
+      if (!workspacePath || !fs.existsSync(workspacePath)) {
+        throw new Error(`Đường dẫn Workspace không hợp lệ: ${workspacePath}`);
       }
-    }
 
-    // Check remote files missing locally
-    for (const [relPath] of Object.entries(remoteMap)) {
-      if (!localMap[relPath]) {
-        toDownload.push({ relPath, status: 'missing_locally' });
+      const accessToken = await getValidAccessToken();
+      const mainFolder = await findOrCreateFolder(accessToken, 'Bruno Collections');
+      const sanitizedName = (workspaceName || 'workspace').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
+      const workspaceFolder = await findOrCreateFolder(accessToken, sanitizedName, mainFolder.id);
+
+      const localMap = buildLocalHashMap(workspacePath);
+      const { manifest } = await fetchRemoteManifest(accessToken, workspaceFolder.id);
+      const remoteMap = manifest.files || {};
+
+      const toUpload = [];
+      const toDownload = [];
+      let unchanged = 0;
+
+      // Check local files against remote
+      for (const [relPath, localItem] of Object.entries(localMap)) {
+        const remoteItem = remoteMap[relPath];
+        if (!remoteItem) {
+          toUpload.push({ relPath, status: 'new' });
+        } else if (remoteItem.hash !== localItem.hash) {
+          toUpload.push({ relPath, status: 'modified' });
+        } else {
+          unchanged++;
+        }
       }
-    }
 
-    return {
-      totalLocalFiles: Object.keys(localMap).length,
-      totalRemoteFiles: Object.keys(remoteMap).length,
-      toUpload,
-      toDownload,
-      unchanged,
-      folderUrl: workspaceFolder.webViewLink,
-      lastRemoteSync: manifest.lastSynced || null
-    };
+      // Check remote files missing locally
+      for (const [relPath] of Object.entries(remoteMap)) {
+        if (!localMap[relPath]) {
+          toDownload.push({ relPath, status: 'missing_locally' });
+        }
+      }
+
+      return {
+        totalLocalFiles: Object.keys(localMap).length,
+        totalRemoteFiles: Object.keys(remoteMap).length,
+        toUpload,
+        toDownload,
+        unchanged,
+        folderUrl: workspaceFolder.webViewLink,
+        lastRemoteSync: manifest.lastSynced || null
+      };
+    } catch (err) {
+      throw formatApiError(err);
+    }
   });
 
   // Hash Map Delta Sync (PUSH)
   ipcMain.handle('gdrive:sync-push', async (event, { workspacePath, workspaceName }) => {
-    if (!workspacePath || !fs.existsSync(workspacePath)) {
-      throw new Error(`Đường dẫn Workspace không hợp lệ: ${workspacePath}`);
-    }
-
-    const accessToken = await getValidAccessToken();
-    const mainFolder = await findOrCreateFolder(accessToken, 'Bruno Collections');
-    const sanitizedName = (workspaceName || 'workspace').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
-    const workspaceFolder = await findOrCreateFolder(accessToken, sanitizedName, mainFolder.id);
-    store.set('folderUrl', workspaceFolder.webViewLink);
-
-    // 1. Build local hash map
-    const localMap = buildLocalHashMap(workspacePath);
-
-    // 2. Fetch remote manifest
-    let { manifestFileId, manifest } = await fetchRemoteManifest(accessToken, workspaceFolder.id);
-    const remoteMap = manifest.files || {};
-
-    // 3. Diff: find files to upload
-    const toUpload = [];
-    let unchangedCount = 0;
-
-    for (const [relPath, localItem] of Object.entries(localMap)) {
-      const remoteItem = remoteMap[relPath];
-      if (!remoteItem || remoteItem.hash !== localItem.hash) {
-        toUpload.push({
-          relPath,
-          localItem,
-          existingDriveId: remoteItem?.driveFileId || null
-        });
-      } else {
-        unchangedCount++;
+    try {
+      if (!workspacePath || !fs.existsSync(workspacePath)) {
+        throw new Error(`Đường dẫn Workspace không hợp lệ: ${workspacePath}`);
       }
-    }
 
-    // 4. Upload delta files
-    const folderCache = { '': workspaceFolder.id };
-    const updatedFiles = { ...remoteMap };
+      const accessToken = await getValidAccessToken();
+      const mainFolder = await findOrCreateFolder(accessToken, 'Bruno Collections');
+      const sanitizedName = (workspaceName || 'workspace').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
+      const workspaceFolder = await findOrCreateFolder(accessToken, sanitizedName, mainFolder.id);
+      store.set('folderUrl', workspaceFolder.webViewLink);
 
-    for (const item of toUpload) {
-      const fullPath = path.join(workspacePath, item.relPath);
-      const parentFolderId = await resolveDriveFolderPath(
+      // 1. Build local hash map
+      const localMap = buildLocalHashMap(workspacePath);
+
+      // 2. Fetch remote manifest
+      let { manifestFileId, manifest } = await fetchRemoteManifest(accessToken, workspaceFolder.id);
+      const remoteMap = manifest.files || {};
+
+      // 3. Diff: find files to upload
+      const toUpload = [];
+      let unchangedCount = 0;
+
+      for (const [relPath, localItem] of Object.entries(localMap)) {
+        const remoteItem = remoteMap[relPath];
+        if (!remoteItem || remoteItem.hash !== localItem.hash) {
+          toUpload.push({
+            relPath,
+            localItem,
+            existingDriveId: remoteItem?.driveFileId || null
+          });
+        } else {
+          unchangedCount++;
+        }
+      }
+
+      // 4. Upload delta files
+      const folderCache = { '': workspaceFolder.id };
+      const updatedFiles = { ...remoteMap };
+
+      for (const item of toUpload) {
+        const fullPath = path.join(workspacePath, item.relPath);
+        const parentFolderId = await resolveDriveFolderPath(
+          accessToken,
+          workspaceFolder.id,
+          item.relPath,
+          folderCache
+        );
+        const fileName = path.basename(item.relPath);
+
+        const uploaded = await uploadSingleFile(
+          accessToken,
+          fullPath,
+          fileName,
+          parentFolderId,
+          item.existingDriveId
+        );
+
+        updatedFiles[item.relPath] = {
+          driveFileId: uploaded.id,
+          hash: item.localItem.hash,
+          size: item.localItem.size,
+          mtime: item.localItem.mtime
+        };
+      }
+
+      // 5. Update and upload new manifest.json
+      const nowISO = new Date().toISOString();
+      const newManifest = {
+        workspaceName: sanitizedName,
+        version: (manifest.version || 0) + 1,
+        lastSynced: nowISO,
+        syncedBy: os.hostname(),
+        files: updatedFiles
+      };
+
+      manifestFileId = await saveRemoteManifest(
         accessToken,
         workspaceFolder.id,
-        item.relPath,
-        folderCache
-      );
-      const fileName = path.basename(item.relPath);
-
-      const uploaded = await uploadSingleFile(
-        accessToken,
-        fullPath,
-        fileName,
-        parentFolderId,
-        item.existingDriveId
+        manifestFileId,
+        newManifest
       );
 
-      updatedFiles[item.relPath] = {
-        driveFileId: uploaded.id,
-        hash: item.localItem.hash,
-        size: item.localItem.size,
-        mtime: item.localItem.mtime
+      const lastSyncedDisplay = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+      store.set('lastSynced', lastSyncedDisplay);
+
+      return {
+        success: true,
+        uploadedCount: toUpload.length,
+        unchangedCount,
+        totalFiles: Object.keys(updatedFiles).length,
+        lastSynced: lastSyncedDisplay,
+        folderUrl: workspaceFolder.webViewLink
       };
+    } catch (err) {
+      throw formatApiError(err);
     }
-
-    // 5. Update and upload new manifest.json
-    const nowISO = new Date().toISOString();
-    const newManifest = {
-      workspaceName: sanitizedName,
-      version: (manifest.version || 0) + 1,
-      lastSynced: nowISO,
-      syncedBy: os.hostname(),
-      files: updatedFiles
-    };
-
-    manifestFileId = await saveRemoteManifest(
-      accessToken,
-      workspaceFolder.id,
-      manifestFileId,
-      newManifest
-    );
-
-    const lastSyncedDisplay = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-    store.set('lastSynced', lastSyncedDisplay);
-
-    return {
-      success: true,
-      uploadedCount: toUpload.length,
-      unchangedCount,
-      totalFiles: Object.keys(updatedFiles).length,
-      lastSynced: lastSyncedDisplay,
-      folderUrl: workspaceFolder.webViewLink
-    };
   });
 
   // Hash Map Delta Sync (PULL - Download from Drive)
   ipcMain.handle('gdrive:sync-pull', async (event, { workspacePath, workspaceName }) => {
-    if (!workspacePath || !fs.existsSync(workspacePath)) {
-      throw new Error(`Đường dẫn Workspace không hợp lệ: ${workspacePath}`);
-    }
-
-    const accessToken = await getValidAccessToken();
-    const mainFolder = await findOrCreateFolder(accessToken, 'Bruno Collections');
-    const sanitizedName = (workspaceName || 'workspace').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
-    const workspaceFolder = await findOrCreateFolder(accessToken, sanitizedName, mainFolder.id);
-
-    // 1. Fetch remote manifest
-    const { manifest } = await fetchRemoteManifest(accessToken, workspaceFolder.id);
-    const remoteMap = manifest.files || {};
-
-    if (Object.keys(remoteMap).length === 0) {
-      throw new Error('Chưa có dữ liệu nào trên Google Drive cho Workspace này.');
-    }
-
-    // 2. Build local hash map
-    const localMap = buildLocalHashMap(workspacePath);
-
-    // 3. Diff: find files to download
-    const toDownload = [];
-    let unchangedCount = 0;
-
-    for (const [relPath, remoteItem] of Object.entries(remoteMap)) {
-      const localItem = localMap[relPath];
-      if (!localItem || localItem.hash !== remoteItem.hash) {
-        toDownload.push({ relPath, remoteItem });
-      } else {
-        unchangedCount++;
+    try {
+      if (!workspacePath || !fs.existsSync(workspacePath)) {
+        throw new Error(`Đường dẫn Workspace không hợp lệ: ${workspacePath}`);
       }
+
+      const accessToken = await getValidAccessToken();
+      const mainFolder = await findOrCreateFolder(accessToken, 'Bruno Collections');
+      const sanitizedName = (workspaceName || 'workspace').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
+      const workspaceFolder = await findOrCreateFolder(accessToken, sanitizedName, mainFolder.id);
+
+      // 1. Fetch remote manifest
+      const { manifest } = await fetchRemoteManifest(accessToken, workspaceFolder.id);
+      const remoteMap = manifest.files || {};
+
+      if (Object.keys(remoteMap).length === 0) {
+        throw new Error('Chưa có dữ liệu nào trên Google Drive cho Workspace này.');
+      }
+
+      // 2. Build local hash map
+      const localMap = buildLocalHashMap(workspacePath);
+
+      // 3. Diff: find files to download
+      const toDownload = [];
+      let unchangedCount = 0;
+
+      for (const [relPath, remoteItem] of Object.entries(remoteMap)) {
+        const localItem = localMap[relPath];
+        if (!localItem || localItem.hash !== remoteItem.hash) {
+          toDownload.push({ relPath, remoteItem });
+        } else {
+          unchangedCount++;
+        }
+      }
+
+      // 4. Download changed files
+      for (const item of toDownload) {
+        const destPath = path.join(workspacePath, item.relPath);
+        await downloadSingleFile(accessToken, item.remoteItem.driveFileId, destPath);
+      }
+
+      const lastSyncedDisplay = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+      store.set('lastSynced', lastSyncedDisplay);
+
+      return {
+        success: true,
+        downloadedCount: toDownload.length,
+        unchangedCount,
+        totalFiles: Object.keys(remoteMap).length,
+        lastSynced: lastSyncedDisplay,
+        folderUrl: workspaceFolder.webViewLink
+      };
+    } catch (err) {
+      throw formatApiError(err);
     }
-
-    // 4. Download changed files
-    for (const item of toDownload) {
-      const destPath = path.join(workspacePath, item.relPath);
-      await downloadSingleFile(accessToken, item.remoteItem.driveFileId, destPath);
-    }
-
-    const lastSyncedDisplay = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-    store.set('lastSynced', lastSyncedDisplay);
-
-    return {
-      success: true,
-      downloadedCount: toDownload.length,
-      unchangedCount,
-      totalFiles: Object.keys(remoteMap).length,
-      lastSynced: lastSyncedDisplay,
-      folderUrl: workspaceFolder.webViewLink
-    };
   });
 };
 
