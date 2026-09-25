@@ -41,20 +41,21 @@ const calculateFileHash = (filePath) => {
 };
 
 // Scan directory recursively and build local hash map
-const buildLocalHashMap = (dirPath) => {
+const buildLocalHashMap = (workspacePath) => {
   const files = {};
-  const walk = (currentDir) => {
-    if (!fs.existsSync(currentDir)) return;
-    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+
+  const scanDir = (dirToScan, prefix = '', rootBasePath = workspacePath) => {
+    if (!fs.existsSync(dirToScan)) return;
+    const entries = fs.readdirSync(dirToScan, { withFileTypes: true });
     for (const entry of entries) {
-      const fullPath = path.join(currentDir, entry.name);
-      const relPath = path.relative(dirPath, fullPath).replace(/\\/g, '/');
+      const fullPath = path.join(dirToScan, entry.name);
+      const relPath = prefix ? `${prefix}/${entry.name}` : path.relative(rootBasePath, fullPath).replace(/\\/g, '/');
 
       if (entry.isDirectory()) {
         if (['.git', 'node_modules', '.bruno', '.next', 'out'].includes(entry.name)) {
           continue;
         }
-        walk(fullPath);
+        scanDir(fullPath, relPath, rootBasePath);
       } else if (entry.isFile()) {
         if (entry.name === '.DS_Store' || entry.name === 'Thumbs.db') {
           continue;
@@ -65,7 +66,8 @@ const buildLocalHashMap = (dirPath) => {
           files[relPath] = {
             hash,
             size: stat.size,
-            mtime: Math.floor(stat.mtimeMs)
+            mtime: Math.floor(stat.mtimeMs),
+            localFullPath: fullPath
           };
         } catch (e) {
           console.error('Error hashing file:', fullPath, e);
@@ -74,7 +76,67 @@ const buildLocalHashMap = (dirPath) => {
     }
   };
 
-  walk(dirPath);
+  // 1. Scan workspace root (includes workspace.yml, environments/*.yml, .env*, and local collections)
+  scanDir(workspacePath, '', workspacePath);
+
+  // 2. Parse workspace.yml to discover referenced external collections and their environments
+  const workspaceYmlPath = path.join(workspacePath, 'workspace.yml');
+  if (fs.existsSync(workspaceYmlPath)) {
+    try {
+      const yaml = require('js-yaml');
+      const doc = yaml.load(fs.readFileSync(workspaceYmlPath, 'utf8'));
+      if (doc && Array.isArray(doc.collections)) {
+        for (const c of doc.collections) {
+          if (!c.path) continue;
+          const collPath = path.isAbsolute(c.path) ? c.path : path.resolve(workspacePath, c.path);
+          const relToWorkspace = path.relative(workspacePath, collPath);
+          const isInsideWorkspace = !relToWorkspace.startsWith('..') && !path.isAbsolute(relToWorkspace);
+          if (!isInsideWorkspace && fs.existsSync(collPath)) {
+            // Scan external collection into collections/<name>
+            scanDir(collPath, `collections/${c.name}`, collPath);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error parsing workspace.yml in buildLocalHashMap:', err);
+    }
+  }
+
+  // 3. Export electron-store global environments if workspace doesn't have them yet
+  try {
+    const { globalEnvironmentsStore } = require('../store/global-environments');
+    const storeEnvs = globalEnvironmentsStore.getGlobalEnvironments() || [];
+    if (storeEnvs.length > 0) {
+      const envDir = path.join(workspacePath, 'environments');
+      if (!fs.existsSync(envDir)) {
+        fs.mkdirSync(envDir, { recursive: true });
+      }
+      const yaml = require('js-yaml');
+      for (const env of storeEnvs) {
+        if (!env?.name) continue;
+        const envFile = path.join(envDir, `${env.name}.yml`);
+        if (!fs.existsSync(envFile)) {
+          const content = yaml.dump({
+            name: env.name,
+            variables: env.variables || [],
+            color: env.color
+          });
+          fs.writeFileSync(envFile, content, 'utf8');
+          const stat = fs.statSync(envFile);
+          const hash = calculateFileHash(envFile);
+          files[`environments/${env.name}.yml`] = {
+            hash,
+            size: stat.size,
+            mtime: Math.floor(stat.mtimeMs),
+            localFullPath: envFile
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error exporting global environments:', e);
+  }
+
   return files;
 };
 
@@ -594,7 +656,7 @@ const registerGoogleDriveIpc = (mainWindow) => {
       const updatedFiles = { ...remoteMap };
 
       for (const item of toUpload) {
-        const fullPath = path.join(workspacePath, item.relPath);
+        const fullPath = item.localItem?.localFullPath || path.join(workspacePath, item.relPath);
         const parentFolderId = await resolveDriveFolderPath(
           accessToken,
           workspaceFolder.id,
@@ -615,7 +677,8 @@ const registerGoogleDriveIpc = (mainWindow) => {
           driveFileId: uploaded.id,
           hash: item.localItem.hash,
           size: item.localItem.size,
-          mtime: item.localItem.mtime
+          mtime: item.localItem.mtime,
+          localFullPath: item.localItem?.localFullPath || null
         };
       }
 
@@ -682,7 +745,7 @@ const registerGoogleDriveIpc = (mainWindow) => {
       for (const [relPath, remoteItem] of Object.entries(remoteMap)) {
         const localItem = localMap[relPath];
         if (!localItem || localItem.hash !== remoteItem.hash) {
-          toDownload.push({ relPath, remoteItem });
+          toDownload.push({ relPath, remoteItem, localItem });
         } else {
           unchangedCount++;
         }
@@ -690,8 +753,23 @@ const registerGoogleDriveIpc = (mainWindow) => {
 
       // 4. Download changed files
       for (const item of toDownload) {
-        const destPath = path.join(workspacePath, item.relPath);
+        const destPath = (item.localItem?.localFullPath)
+          || (item.remoteItem?.localFullPath && fs.existsSync(path.dirname(item.remoteItem.localFullPath)))
+          ? (item.localItem?.localFullPath || item.remoteItem.localFullPath)
+          : path.join(workspacePath, item.relPath);
+
         await downloadSingleFile(accessToken, item.remoteItem.driveFileId, destPath);
+      }
+
+      // 5. Notify renderer if workspace global environments were downloaded
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        try {
+          const { globalEnvironmentsManager } = require('../store/workspace-environments');
+          const envResult = await globalEnvironmentsManager.getGlobalEnvironments(workspacePath);
+          mainWindow.webContents.send('main:load-global-environments', envResult);
+        } catch (err) {
+          console.error('Failed to notify renderer of updated global environments:', err);
+        }
       }
 
       const lastSyncedDisplay = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });

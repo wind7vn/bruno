@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useSelector } from 'react-redux';
+import { useSelector, useDispatch } from 'react-redux';
 import toast from 'react-hot-toast';
 import Modal from 'components/Modal';
 import Button from 'ui/Button';
+import { updateGlobalEnvironments } from 'providers/ReduxStore/slices/global-environments';
 
 // Google Drive SVG Icon
 export const GoogleDriveIcon = ({ size = 18, className = '' }) => (
@@ -52,6 +53,7 @@ const GoogleDriveSync = ({ variant = 'titlebar', isOpen: controlledIsOpen, onClo
   const [clientIdInput, setClientIdInput] = useState('');
   const [clientSecretInput, setClientSecretInput] = useState('');
 
+  const dispatch = useDispatch();
   const { workspaces, activeWorkspaceUid } = useSelector((state) => state.workspaces);
   const activeWorkspace = workspaces?.find((w) => w.uid === activeWorkspaceUid);
 
@@ -215,6 +217,22 @@ const GoogleDriveSync = ({ variant = 'titlebar', isOpen: controlledIsOpen, onClo
           lastSynced: res.lastSynced,
           folderUrl: res.folderUrl
         }));
+
+        // Reload global environments into Redux store so UI updates immediately
+        if (window.ipcRenderer && activeWorkspace?.pathname) {
+          try {
+            const envRes = await window.ipcRenderer.invoke('renderer:get-global-environments', {
+              workspaceUid: activeWorkspace.uid,
+              workspacePath: activeWorkspace.pathname
+            });
+            if (envRes) {
+              dispatch(updateGlobalEnvironments(envRes));
+            }
+          } catch (e) {
+            console.error('Error reloading global environments:', e);
+          }
+        }
+
         await checkDiff();
       }
     } catch (err) {
