@@ -1,10 +1,6 @@
 name: Windows Tests
 on:
   workflow_dispatch:
-  push:
-    branches: [main, 'release/v*']
-  pull_request:
-    branches: [main, 'release/v*']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
